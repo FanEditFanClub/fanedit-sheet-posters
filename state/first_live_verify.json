@@ -5,8 +5,8 @@
     "x_notified": true
   },
   "sheet": {
-    "discord_notified": false,
-    "facebook_notified": false,
-    "x_notified": false
+    "discord_notified": true,
+    "facebook_notified": true,
+    "x_notified": true
   }
 }
