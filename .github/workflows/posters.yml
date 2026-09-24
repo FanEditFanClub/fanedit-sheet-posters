@@ -18,17 +18,82 @@ jobs:
           python-version: "3.12"
       - name: install deps
         run: pip install -r requirements.txt
-      - name: test error alert
+      - name: redo facebook and x posts
         env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_ERROR_CHANNEL: discord-moderators
+          BUFFER_TOKEN: ${{ secrets.BUFFER_TOKEN }}
+          FACEBOOK_PAGE_TOKEN: ${{ secrets.FACEBOOK_PAGE_TOKEN }}
         run: |
           python - <<'PYEOF'
-          import os
-          from destinations import resolve_discord_channel_id, post_discord
-          token = os.environ["DISCORD_BOT_TOKEN"]
-          want = os.environ["DISCORD_ERROR_CHANNEL"]
-          cid = resolve_discord_channel_id(token, want)
-          ok = post_discord(token, cid, "Test alert from the Fan Edit posters pipeline — error alerts are wired to this channel. Nothing is wrong; please ignore.")
-          print("ALERT_TEST_POSTED" if ok else "ALERT_TEST_FAILED")
+          import json, os, urllib.request, urllib.parse
+          from destinations import post_buffer_x, post_facebook_page, resolve_buffer_profile_id
+
+          cfg = json.load(open("config.json"))
+          tpl = cfg["templates"]["sheet"]
+          vals = {"editor": "DeloresOlaf",
+                  "title": "Buffy the Vampire Slayer: Acid Party",
+                  "original": "Buffy the Vampire Slayer: Season 1-4"}
+          x_text = tpl["x"].format(**vals)
+          fb_text = tpl["facebook"].format(**vals)
+          print("X_TEXT:", x_text)
+          print("FB_TEXT:", fb_text)
+
+          buf_token = os.environ["BUFFER_TOKEN"]
+          fb_token = os.environ["FACEBOOK_PAGE_TOKEN"]
+          page_id = cfg["facebook"]["page_id"]
+          FB_LINK = "https://faneditcentral.wixsite.com/home"
+
+          # 1. repost X with fixed formatting (new post first, so we never have zero)
+          pid = resolve_buffer_profile_id(buf_token, cfg["buffer"]["channel_name"])
+          post_buffer_x(buf_token, pid, x_text)
+          print("X_REPOSTED")
+
+          # 2. repost Facebook with fixed formatting
+          post_facebook_page(fb_token, page_id, fb_text, link=FB_LINK)
+          print("FB_REPOSTED")
+
+          # 3. find and delete the old FB post (old formatting had "A Fan Edit of <newline><newline>")
+          def fb_get(path, params):
+              url = "https://graph.facebook.com/v21.0/" + path + "?" + urllib.parse.urlencode(params)
+              with urllib.request.urlopen(urllib.request.Request(url), timeout=60) as r:
+                  return json.load(r)
+
+          feed = fb_get(page_id + "/posts",
+                        {"fields": "id,message,created_time", "limit": "10", "access_token": fb_token})
+          old_id = None
+          for p in feed.get("data", []):
+              msg = p.get("message", "")
+              if "Acid Party" in msg and "A Fan Edit of 
+
+" in msg:
+                  old_id = p["id"]
+                  break
+          if old_id:
+              del_url = ("https://graph.facebook.com/v21.0/" + old_id + "?access_token="
+                         + urllib.parse.quote(fb_token, safe=""))
+              with urllib.request.urlopen(urllib.request.Request(del_url, method="DELETE"), timeout=60) as r:
+                  print("FB_OLD_DELETED", old_id, r.read()[:100])
+          else:
+              print("FB_OLD_NOT_FOUND")
+
+          # 4. delete the old Buffer/X post
+          def buf_gql(query):
+              body = json.dumps({"query": query}).encode()
+              req = urllib.request.Request("https://api.buffer.com", data=body, headers={
+                  "Authorization": "Bearer " + buf_token, "Content-Type": "application/json"})
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  return json.load(r)
+
+          OLD_BUF_ID = "6ab553d0457da0b99bc6edee"
+          for id_field in ("id", "postId"):
+              q = ("mutation { deletePost(input: { " + id_field + ': "' + OLD_BUF_ID + '" }) '
+                   "{ __typename ... on DeletePostSuccess { post { id status } } "
+                   "... on MutationError { message } } }")
+              resp = buf_gql(q)
+              errs = resp.get("errors") or []
+              data = (resp.get("data") or {}).get("deletePost") or {}
+              print("BUFFER_DELETE_ATTEMPT", id_field, "typename=", data.get("__typename"),
+                    "errors=", str(errs)[:200], "message=", data.get("message"))
+              if data.get("__typename") == "DeletePostSuccess":
+                  print("BUFFER_DELETE_OK")
+                  break
           PYEOF
