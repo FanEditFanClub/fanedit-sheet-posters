@@ -1,4 +1,5 @@
-"""Temp one-off: delete the old badly-formatted Buffy X post from Buffer."""
+"""Temp one-off: delete the old badly-formatted Buffy X post from Buffer.
+deletePost takes input.id (PostId!) - selection set is just __typename."""
 import json
 import os
 import urllib.request
@@ -17,17 +18,16 @@ def buf_gql(query):
 
 
 OLD_BUF_ID = "6ab553d0457da0b99bc6edee"
-for id_field in ("id", "postId"):
-    q = ("mutation { deletePost(input: { " + id_field + ': "' + OLD_BUF_ID + '" }) '
-         "{ __typename ... on DeletePostSuccess { post { id status } } "
-         "... on MutationError { message } } }")
-    resp = buf_gql(q)
-    errs = resp.get("errors") or []
-    data = (resp.get("data") or {}).get("deletePost") or {}
-    print("BUFFER_DELETE_ATTEMPT", id_field,
-          "typename=", data.get("__typename"),
-          "errors=", str(errs)[:200],
-          "message=", data.get("message"))
-    if data.get("__typename") == "DeletePostSuccess":
-        print("BUFFER_DELETE_OK")
-        break
+q = ('mutation { deletePost(input: { id: "' + OLD_BUF_ID + '" }) '
+     '{ __typename ... on MutationError { message } } }')
+resp = buf_gql(q)
+errs = resp.get("errors") or []
+data = (resp.get("data") or {}).get("deletePost") or {}
+print("BUFFER_DELETE_ATTEMPT id",
+      "typename=", data.get("__typename"),
+      "errors=", str(errs)[:200],
+      "message=", data.get("message"))
+if data.get("__typename") == "DeletePostSuccess":
+    print("BUFFER_DELETE_OK")
+else:
+    print("BUFFER_DELETE_FAILED")
