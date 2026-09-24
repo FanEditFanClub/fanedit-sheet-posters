@@ -18,7 +18,15 @@ jobs:
           python-version: "3.12"
       - name: install deps
         run: pip install -r requirements.txt
+      - name: validate fb token
+        env:
+          FACEBOOK_PAGE_TOKEN: ${{ secrets.FACEBOOK_PAGE_TOKEN }}
+        run: python validate_fb.py; true
+      - name: fb redo
+        env:
+          FACEBOOK_PAGE_TOKEN: ${{ secrets.FACEBOOK_PAGE_TOKEN }}
+        run: python fb_redo.py; true
       - name: delete old x post
         env:
           BUFFER_TOKEN: ${{ secrets.BUFFER_TOKEN }}
-        run: python x_cleanup.py
+        run: python x_cleanup.py; true
