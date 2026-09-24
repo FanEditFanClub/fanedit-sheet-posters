@@ -10,6 +10,7 @@ never blasted out. Returns a report dict; run.py aggregates and alerts.
 from __future__ import annotations
 
 import csv
+import copy
 import io
 import urllib.parse
 import urllib.request
@@ -62,7 +63,12 @@ def run(cfg: dict, ctx: dict) -> dict:
         log(f"BASELINE sheet: marked {len(st['seen_keys'])} existing rows seen, posted nothing.")
         return report
 
-    verify = load_state("first_live_verify.json", ctx["verify_default"])
+    verify = load_state("first_live_verify.json", {})
+    # Merge in defaults defensively: a missing or partial verify file must
+    # never crash a run (KeyError after posts already went out). deepcopy so
+    # we never mutate the shared VERIFY_DEFAULT in ctx.
+    for _job, _flags in ctx["verify_default"].items():
+        verify.setdefault(_job, copy.deepcopy(_flags))
     new_rows = [r for r in rows if row_key(r) not in seen]
     if new_rows and not ctx.get("buffer_pid"):
         try:
