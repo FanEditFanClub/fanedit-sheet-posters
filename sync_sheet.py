@@ -78,9 +78,10 @@ def run(cfg: dict, ctx: dict) -> dict:
             report["errors"].append(f"buffer profile resolve: {e}")
 
     for r in new_rows:
-        editor = r[1].strip() if len(r) > 1 else ""
-        title = r[2].strip()
-        original = r[3].strip() if len(r) > 3 else ""
+        norm = lambda v: " ".join(v.split())
+        editor = norm(r[1]) if len(r) > 1 else ""
+        title = norm(r[2])
+        original = norm(r[3]) if len(r) > 3 else ""
         tpl = cfg["templates"]["sheet"]
         texts = {d: tpl[d].format(editor=editor, title=title, original=original)
                  for d in DESTS}
