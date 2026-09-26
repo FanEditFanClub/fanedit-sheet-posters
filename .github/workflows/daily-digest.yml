@@ -10,6 +10,10 @@ on:
         description: "Exact text to post instead of a generated digest ({headline} = title line)"
         required: false
         default: ""
+      manual_channel:
+        description: "Channel name override for manual_message (default: the digest channel)"
+        required: false
+        default: ""
 permissions:
   contents: write
 concurrency:
@@ -34,6 +38,7 @@ jobs:
           NOTIFIER_PAT: ${{ secrets.NOTIFIER_PAT }}
           DISCORD_DIGEST_CHANNEL: 📐cyber-chat💬
           MANUAL_MESSAGE: ${{ inputs.manual_message }}
+          MANUAL_CHANNEL: ${{ inputs.manual_channel }}
           DISCORD_ERROR_CHANNEL: discord-moderators
           GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPO: ${{ github.repository }}
