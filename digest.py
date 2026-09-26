@@ -117,7 +117,7 @@ def fetch_reddit_items(rss_url: str, since: dt.datetime) -> list:
 # ------------------------------------------------------------------ AI
 
 def gemini_recap(api_key: str, reddit_items: list, sheet_rows: list,
-                 date_label: str) -> str:
+                 drive_files: list | None, date_label: str) -> str:
     """Ask Gemini for a short Discord-formatted recap. Raises on failure."""
     lines = [
         "You are writing a daily recap for the Fan Edit Fan Club Discord",
@@ -151,6 +151,16 @@ def gemini_recap(api_key: str, reddit_items: list, sheet_rows: list,
             lines.append(f'- "{title}"{by}{of}')
     else:
         lines.append("(none)")
+    lines.append("")
+    lines.append("NEW FILES ADDED TO THE FAN EDIT FAN CLUB COLLECTION "
+                 "(Google Drive):")
+    if drive_files is None:
+        lines.append("(scan unavailable today)")
+    elif drive_files:
+        for f in drive_files[:MAX_ITEMS_PER_SOURCE]:
+            lines.append(f"- {f['name']} ({f['kind']}, in {f['path']})")
+    else:
+        lines.append("(none)")
 
     prompt = "\n".join(lines)
     body = json.dumps({
@@ -182,7 +192,8 @@ def gemini_recap(api_key: str, reddit_items: list, sheet_rows: list,
 
 # -------------------------------------------------------------- message
 
-def build_fallback(reddit_items: list, sheet_rows: list) -> str:
+def build_fallback(reddit_items: list, sheet_rows: list,
+                   drive_files: list | None) -> str:
     parts = []
     if reddit_items:
         parts.append(f"**Reddit feed** ({len(reddit_items)} new):")
@@ -199,25 +210,32 @@ def build_fallback(reddit_items: list, sheet_rows: list) -> str:
             parts.append(f'- "{title}"{by}')
         if len(sheet_rows) > 12:
             parts.append(f"_...and {len(sheet_rows) - 12} more_")
+    if drive_files:
+        parts.append(f"**Collection** ({len(drive_files)} new files):")
+        for f in drive_files[:12]:
+            parts.append(f"- {f['name']} ({f['kind']}, in {f['path']})")
+        if len(drive_files) > 12:
+            parts.append(f"_...and {len(drive_files) - 12} more_")
     parts.append("_AI recap unavailable today - full list above._")
     return "\n".join(parts)
 
 
 def build_message(date_label: str, reddit_items: list, sheet_rows: list,
-                  api_key: str) -> str:
+                  drive_files: list | None, api_key: str) -> str:
     header = f"\U0001f4f0 **Daily Fan Edit Digest - {date_label}**"
-    if not reddit_items and not sheet_rows:
+    if not reddit_items and not sheet_rows and not drive_files:
         return (header + "\n\U0001f4ed Quiet day - no new fan edits in the "
                 "last 24 hours. The feeds are watching; see you tomorrow.")
     body = ""
     if api_key:
         try:
-            body = gemini_recap(api_key, reddit_items, sheet_rows, date_label)
+            body = gemini_recap(api_key, reddit_items, sheet_rows,
+                                drive_files, date_label)
             log("gemini recap ok")
         except Exception as e:  # noqa: BLE001
             log(f"gemini recap failed, using fallback: {e}")
     if not body:
-        body = build_fallback(reddit_items, sheet_rows)
+        body = build_fallback(reddit_items, sheet_rows, drive_files)
     msg = f"{header}\n{body}"
     return msg[:1950]
 
@@ -286,10 +304,28 @@ def main() -> int:
         log(f"digest window: {len(reddit_items)} reddit items, "
             f"{len(new_rows)} new sheet rows.")
 
+    # Drive collection scan (published by the daily drive_digest_scan cron
+    # running in the agent environment, which holds the Drive connector).
+    drive_files: list | None = None
+    try:
+        dd = load_state("drive_digest.json", {})
+        gen = dd.get("generated_utc", "")
+        age_h = ((now - dt.datetime.fromisoformat(gen)).total_seconds() / 3600
+                 if gen else 1e9)
+        if age_h <= 36 and isinstance(dd.get("new_files"), list):
+            drive_files = dd["new_files"]
+            log(f"drive scan: {len(drive_files)} new collection files "
+                f"(age {age_h:.1f}h)")
+        else:
+            log(f"drive scan stale/missing (age {age_h:.1f}h); "
+                "section will show unavailable")
+    except Exception as e:  # noqa: BLE001
+        log(f"drive scan read failed: {e}")
+
     date_label = now.astimezone(
         dt.timezone(dt.timedelta(hours=-4))).strftime("%b %d")
     msg = build_message(date_label, reddit_items, new_rows,
-                        env("GEMINI_API_KEY"))
+                        drive_files, env("GEMINI_API_KEY"))
     if note:
         msg = f"{msg}\n_{note}_"
     msg = msg[:1950]
