@@ -1,0 +1,6 @@
+{"ts": "2026-09-26T03:55:00+00:00", "text": "Website: Facebook tab phone scroll-trap fix and shorter Discord panels published live."}
+{"ts": "2026-09-26T04:15:00+00:00", "text": "New automation: daily AI digest posts in #cyberchat at 6pm ET, recapping the Reddit feed, new Fan Edit Central Database entries, and new collection files."}
+{"ts": "2026-09-26T04:16:30+00:00", "text": "Digest fixes: script now picks the current Gemini model automatically (Google retired the old names) and uses the correct #cyberchat channel."}
+{"ts": "2026-09-26T04:26:00+00:00", "text": "Digest format finalized: bold '@FanEditFanClub Daily Bot Channel Recap' headline with clickable tag, one casual paragraph, no bullets or links."}
+{"ts": "2026-09-26T04:28:00+00:00", "text": "Digest workflow gained one-off post inputs (manual_message + manual_channel) for announcements to any channel."}
+{"ts": "2026-09-26T04:20:00+00:00", "text": "The 9am collection notifier now logs every posted file (name + timestamp) so the daily digest can include new collection files."}
