@@ -399,10 +399,11 @@ def main() -> int:
         mention = resolve_discord_user_mention(token, "faneditfanclub")
         head = f"**{mention} Daily Bot Channel Recap \U0001f916**"
         msg = manual.replace("{headline}", head)[:1950]
-        cid = resolve_discord_channel_id(
-            token, env("DISCORD_DIGEST_CHANNEL", "cyberchat"))
+        channel = (env("MANUAL_CHANNEL")
+                   or env("DISCORD_DIGEST_CHANNEL", "cyberchat"))
+        cid = resolve_discord_channel_id(token, channel)
         post_discord(token, cid, msg)
-        log("manual digest message posted")
+        log(f"manual message posted to #{channel}")
         return 0
 
     st = load_state(STATE_NAME, {})
