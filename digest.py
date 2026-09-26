@@ -43,7 +43,8 @@ import xml.etree.ElementTree as ET
 
 from common import env, load_config, load_state, save_state, log
 from destinations import (DestinationError, post_discord,
-                          resolve_discord_channel_id)
+                          resolve_discord_channel_id,
+                          resolve_discord_user_mention)
 
 REDDIT_UA = "fanedit-digest/1.0 (by /u/faneditfanclub)"
 # Overridable without a code change: set GEMINI_MODEL in the workflow env.
@@ -224,19 +225,34 @@ def _gemini_err_text(e: Exception) -> str:
         return f"{type(e).__name__}: {e}"
 
 
-def gemini_recap(api_key: str, reddit_items: list, sheet_rows: list,
-                 notifier_files: list | None, date_label: str) -> str:
+def gemini_recap(api_key: str, mention: str, reddit_items: list,
+                 sheet_rows: list, notifier_files: list | None,
+                 date_label: str) -> str:
     """Ask Gemini for a short Discord-formatted recap. Raises on failure."""
+    head = f"**{mention} Daily Bot Channel Recap \U0001f916**"
     lines = [
-        "You are writing a daily recap for the Fan Edit Fan Club Discord",
-        "server (#cyberchat). Summarize today's new fan-edit activity in a",
-        "casual, hype, fan-community tone. Keep it under 1100 characters.",
-        "Use Discord markdown (bold with **, no # headings).",
-        "Structure: one short opening line, then 2-5 highlight bullets for",
-        "the most interesting items, then one closing line.",
-        "Do not invent titles, editors, or links - only mention items from",
-        "the lists below. If a list is empty, say so briefly instead of",
-        "padding.",
+        "You are the Optimus bot writing the daily recap for the Fan Edit",
+        "Fan Club Discord server.",
+        "",
+        "OUTPUT FORMAT - follow exactly:",
+        f"Line 1 (the headline, copy verbatim): {head}",
+        "Line 2: blank line",
+        "Line 3: ONE single paragraph of casual, hype, fan-community chat",
+        "about what was new in the bot channels since yesterday's post.",
+        "",
+        "HARD RULES:",
+        "- No bullet points, no numbered lists, no line breaks inside the",
+        "  paragraph - one flowing paragraph only.",
+        "- No links or URLs anywhere in the paragraph.",
+        "- No markdown headings.",
+        "- Keep the paragraph under 700 characters.",
+        "- Mention the most interesting new items by name (titles, editors).",
+        "- Skip any source with nothing new - do not announce emptiness,",
+        "  just don't mention it.",
+        "- Do not invent titles, editors, or links - only talk about items",
+        "  from the lists below.",
+        "- If ALL lists are empty, the paragraph is one chill line like:",
+        "  nothing dropped today, feeds are quiet, check back tomorrow.",
         "",
         f"Date: {date_label}",
         "",
@@ -300,52 +316,65 @@ def gemini_recap(api_key: str, reddit_items: list, sheet_rows: list,
 
 # -------------------------------------------------------------- message
 
-def build_fallback(reddit_items: list, sheet_rows: list,
+def build_fallback(mention: str, reddit_items: list, sheet_rows: list,
                    notifier_files: list | None) -> str:
-    parts = []
+    """Plain-prose fallback when Gemini is unavailable. No bullets, no links."""
+    head = f"**{mention} Daily Bot Channel Recap \U0001f916**"
+    bits = []
     if reddit_items:
-        parts.append(f"**Reddit feed** ({len(reddit_items)} new):")
-        for it in reddit_items[:12]:
-            parts.append(f"- {it['title']}\n  {it['url']}")
-        if len(reddit_items) > 12:
-            parts.append(f"_...and {len(reddit_items) - 12} more_")
+        titles = [f'"{norm(it["title"])}"' for it in reddit_items[:3]]
+        more = (f" and {len(reddit_items) - 3} more"
+                if len(reddit_items) > 3 else "")
+        bits.append(f"the Reddit feed had {len(reddit_items)} new "
+                    f"post{'s' if len(reddit_items) != 1 else ''} including "
+                    f"{', '.join(titles)}{more}")
     if sheet_rows:
-        parts.append(f"**Database** ({len(sheet_rows)} new entries):")
-        for r in sheet_rows[:12]:
+        ents = []
+        for r in sheet_rows[:3]:
             editor = norm(r[1]) if len(r) > 1 else ""
             title = norm(r[2])
-            by = f" by {editor}" if editor else ""
-            parts.append(f'- "{title}"{by}')
-        if len(sheet_rows) > 12:
-            parts.append(f"_...and {len(sheet_rows) - 12} more_")
+            ents.append(f'"{title}"' + (f" by {editor}" if editor else ""))
+        more = (f" and {len(sheet_rows) - 3} more"
+                if len(sheet_rows) > 3 else "")
+        bits.append(f"the database picked up {len(sheet_rows)} new "
+                    f"{'entries' if len(sheet_rows) != 1 else 'entry'} "
+                    f"including {', '.join(ents)}{more}")
     if notifier_files:
-        parts.append(f"**Collection** ({len(notifier_files)} new):")
-        for f in notifier_files[:12]:
-            parts.append(f"- {f['name']}")
-        if len(notifier_files) > 12:
-            parts.append(f"_...and {len(notifier_files) - 12} more_")
-    parts.append("_AI recap unavailable today - full list above._")
-    return "\n".join(parts)
+        names = [f'"{f["name"]}"' for f in notifier_files[:3]]
+        more = (f" and {len(notifier_files) - 3} more"
+                if len(notifier_files) > 3 else "")
+        bits.append(f"{len(notifier_files)} new file"
+                    f"{'s' if len(notifier_files) != 1 else ''} landed in "
+                    f"the collection including {', '.join(names)}{more}")
+    if bits:
+        para = ("Fresh drops since yesterday: " + "; ".join(bits) + ". "
+                "That's everything new in the bot channels.")
+    else:
+        para = ("Quiet day in the bot channels - nothing new dropped in the "
+                "last 24 hours. The feeds are watching, see you tomorrow.")
+    return f"{head}\n\n{para}"
 
 
-def build_message(date_label: str, reddit_items: list, sheet_rows: list,
-                  notifier_files: list | None, api_key: str) -> str:
-    header = f"\U0001f4f0 **Daily Fan Edit Digest - {date_label}**"
+def build_message(mention: str, date_label: str, reddit_items: list,
+                  sheet_rows: list, notifier_files: list | None,
+                  api_key: str) -> str:
+    head = f"**{mention} Daily Bot Channel Recap \U0001f916**"
     if not reddit_items and not sheet_rows and not notifier_files:
-        return (header + "\n\U0001f4ed Quiet day - no new fan edits in the "
-                "last 24 hours. The feeds are watching; see you tomorrow.")
+        return (head + "\n\nQuiet day in the bot channels - nothing new "
+                "dropped in the last 24 hours. The feeds are watching, "
+                "see you tomorrow.")
     body = ""
     if api_key:
         try:
-            body = gemini_recap(api_key, reddit_items, sheet_rows,
+            body = gemini_recap(api_key, mention, reddit_items, sheet_rows,
                                 notifier_files, date_label)
             log("gemini recap ok")
         except Exception as e:  # noqa: BLE001
             log(f"gemini recap failed, using fallback: {e}")
     if not body:
-        body = build_fallback(reddit_items, sheet_rows, notifier_files)
-    msg = f"{header}\n{body}"
-    return msg[:1950]
+        body = build_fallback(mention, reddit_items, sheet_rows,
+                              notifier_files)
+    return body[:1950]
 
 
 # ----------------------------------------------------------------- main
@@ -418,7 +447,8 @@ def main() -> int:
 
     date_label = now.astimezone(
         dt.timezone(dt.timedelta(hours=-4))).strftime("%b %d")
-    msg = build_message(date_label, reddit_items, new_rows,
+    mention = resolve_discord_user_mention(token, "faneditfanclub")
+    msg = build_message(mention, date_label, reddit_items, new_rows,
                         notifier_files, env("GEMINI_API_KEY"))
     if note:
         msg = f"{msg}\n_{note}_"
