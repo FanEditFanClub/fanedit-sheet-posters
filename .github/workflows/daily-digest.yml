@@ -27,7 +27,7 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NOTIFIER_PAT: ${{ secrets.NOTIFIER_PAT }}
-          DISCORD_DIGEST_CHANNEL: cyberchat
+          DISCORD_DIGEST_CHANNEL: 📐cyber-chat💬
           DISCORD_ERROR_CHANNEL: discord-moderators
           GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPO: ${{ github.repository }}
