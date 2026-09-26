@@ -1,0 +1,28 @@
+name: daily-changelog
+on:
+  # 01:00 UTC = 9pm EDT in summer, 8pm EST in winter (GitHub cron is UTC-only
+  # and cannot follow US daylight saving).
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: daily-changelog
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: post changelog
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          CHANGELOG_CHANNEL: discord-moderators
+          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_BRANCH: main
+        run: python changelog_post.py
