@@ -391,6 +391,20 @@ def main() -> int:
 
     cfg = load_config()
     now = utcnow()
+
+    manual = env("MANUAL_MESSAGE")
+    if manual and not dry:
+        # One-off post: skip sources/state entirely, just publish the text.
+        # Use {headline} in the text as a placeholder for the title line.
+        mention = resolve_discord_user_mention(token, "faneditfanclub")
+        head = f"**{mention} Daily Bot Channel Recap \U0001f916**"
+        msg = manual.replace("{headline}", head)[:1950]
+        cid = resolve_discord_channel_id(
+            token, env("DISCORD_DIGEST_CHANNEL", "cyberchat"))
+        post_discord(token, cid, msg)
+        log("manual digest message posted")
+        return 0
+
     st = load_state(STATE_NAME, {})
     baselined = bool(st)
 
