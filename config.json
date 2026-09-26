@@ -31,7 +31,7 @@
       "x": "New Post in The Fan Edit Fan Club Reddit Feed - \n\n{title}.\n\n{url}"
     },
     "sheet": {
-      "discord": "A New Row has been added to [The Fan Edit Central Database](https://faneditcentral.wixsite.com/home) - A Fan Edit of \n\n{original} called **{title} by {editor}**.",
+      "discord": "A New Row has been added to [The Fan Edit Central Database](https://faneditcentral.wixsite.com/home) - A Fan Edit of {original} called **{title} by {editor}**.",
       "facebook": "A New Row has been added to The Fan Edit Central Database - A Fan Edit of {original} called {title} by {editor}.",
       "x": "A New Row has been added to The Fan Edit Central Database - A Fan Edit of {original} called {title} by {editor}.\n\nhttps://faneditcentral.wixsite.com/home"
     }
