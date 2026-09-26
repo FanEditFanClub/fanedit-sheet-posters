@@ -6,6 +6,11 @@ Sources (same as the instant posters, read-only here):
     pubDates, so "last 24h" is exact).
   - Sheet: the Fan Edit Central Database 'Newest Additions' tab. New rows
     append at the bottom, so a row-count watermark captures "since yesterday".
+  - Collection: the 9am notifier's posted-log
+    (state/posted_log.json in the private
+    New-Fan-Edit-Fan-Club-Collection-File-Notifier repo) — files it posted
+    to all channels in the last 24h. Needs the NOTIFIER_PAT secret
+    (repo-contents read on that repo); without it the section is skipped.
 
 The item lists go to the Gemini API (free tier) for a short hype-style recap,
 posted to Discord as the Optimus bot. If Gemini is unavailable the digest
@@ -15,6 +20,9 @@ Env:
   DISCORD_BOT_TOKEN   (required) - bot token
   GEMINI_API_KEY      (optional) - Google AI Studio key; without it the digest
                       falls back to the plain list format
+  NOTIFIER_PAT          (optional) - PAT with contents:read on the private
+                      notifier repo; without it the collection section is
+                      skipped
   DISCORD_DIGEST_CHANNEL (default "cyberchat")
   DISCORD_ERROR_CHANNEL  - errors surface here
   GITHUB_PAT / GITHUB_REPO / GITHUB_BRANCH - state persistence (same as run.py)
@@ -27,6 +35,7 @@ import datetime as dt
 import io
 import json
 import os
+import base64
 import sys
 import urllib.parse
 import urllib.request
@@ -116,8 +125,55 @@ def fetch_reddit_items(rss_url: str, since: dt.datetime) -> list:
 
 # ------------------------------------------------------------------ AI
 
+NOTIFIER_REPO = ("FanEditFanClub/"
+                   "New-Fan-Edit-Fan-Club-Collection-File-Notifier")
+NOTIFIER_LOG_PATH = "state/posted_log.json"
+
+
+def fetch_notifier_log(pat: str, since: dt.datetime) -> list | None:
+    """Fetch the 9am notifier's posted-log from the private repo.
+
+    Returns [{name, posted}] for entries posted within the window, or None
+    when the log can't be read (no PAT / fetch failed / file missing yet).
+    """
+    if not pat:
+        log("no NOTIFIER_PAT secret — collection section will be skipped")
+        return None
+    url = (f"https://api.github.com/repos/{NOTIFIER_REPO}/contents/"
+           f"{NOTIFIER_LOG_PATH}?ref=main")
+    try:
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {pat}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": REDDIT_UA,
+        })
+        with urllib.request.urlopen(req, timeout=30) as r:
+            payload = json.loads(base64.b64decode(
+                json.load(r)["content"]).decode())
+    except Exception as e:  # noqa: BLE001
+        log(f"notifier log fetch failed: {e}")
+        return None
+    entries = (payload.get("entries", [])
+               if isinstance(payload, dict) else [])
+    out = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        try:
+            ts = dt.datetime.fromisoformat(e.get("posted_utc", ""))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=dt.timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        if ts >= since:
+            out.append({"name": e.get("name", "?"), "posted": ts})
+    out.sort(key=lambda x: x["posted"])
+    log(f"notifier log: {len(out)} collection files posted in window")
+    return out
+
+
 def gemini_recap(api_key: str, reddit_items: list, sheet_rows: list,
-                 drive_files: list | None, date_label: str) -> str:
+                 notifier_files: list | None, date_label: str) -> str:
     """Ask Gemini for a short Discord-formatted recap. Raises on failure."""
     lines = [
         "You are writing a daily recap for the Fan Edit Fan Club Discord",
@@ -153,12 +209,12 @@ def gemini_recap(api_key: str, reddit_items: list, sheet_rows: list,
         lines.append("(none)")
     lines.append("")
     lines.append("NEW FILES ADDED TO THE FAN EDIT FAN CLUB COLLECTION "
-                 "(Google Drive):")
-    if drive_files is None:
-        lines.append("(scan unavailable today)")
-    elif drive_files:
-        for f in drive_files[:MAX_ITEMS_PER_SOURCE]:
-            lines.append(f"- {f['name']} ({f['kind']}, in {f['path']})")
+                 "(via the 9am notifier):")
+    if notifier_files is None:
+        lines.append("(notifier log unavailable)")
+    elif notifier_files:
+        for f in notifier_files[:MAX_ITEMS_PER_SOURCE]:
+            lines.append(f"- {f['name']}")
     else:
         lines.append("(none)")
 
@@ -193,7 +249,7 @@ def gemini_recap(api_key: str, reddit_items: list, sheet_rows: list,
 # -------------------------------------------------------------- message
 
 def build_fallback(reddit_items: list, sheet_rows: list,
-                   drive_files: list | None) -> str:
+                   notifier_files: list | None) -> str:
     parts = []
     if reddit_items:
         parts.append(f"**Reddit feed** ({len(reddit_items)} new):")
@@ -210,32 +266,32 @@ def build_fallback(reddit_items: list, sheet_rows: list,
             parts.append(f'- "{title}"{by}')
         if len(sheet_rows) > 12:
             parts.append(f"_...and {len(sheet_rows) - 12} more_")
-    if drive_files:
-        parts.append(f"**Collection** ({len(drive_files)} new files):")
-        for f in drive_files[:12]:
-            parts.append(f"- {f['name']} ({f['kind']}, in {f['path']})")
-        if len(drive_files) > 12:
-            parts.append(f"_...and {len(drive_files) - 12} more_")
+    if notifier_files:
+        parts.append(f"**Collection** ({len(notifier_files)} new):")
+        for f in notifier_files[:12]:
+            parts.append(f"- {f['name']}")
+        if len(notifier_files) > 12:
+            parts.append(f"_...and {len(notifier_files) - 12} more_")
     parts.append("_AI recap unavailable today - full list above._")
     return "\n".join(parts)
 
 
 def build_message(date_label: str, reddit_items: list, sheet_rows: list,
-                  drive_files: list | None, api_key: str) -> str:
+                  notifier_files: list | None, api_key: str) -> str:
     header = f"\U0001f4f0 **Daily Fan Edit Digest - {date_label}**"
-    if not reddit_items and not sheet_rows and not drive_files:
+    if not reddit_items and not sheet_rows and not notifier_files:
         return (header + "\n\U0001f4ed Quiet day - no new fan edits in the "
                 "last 24 hours. The feeds are watching; see you tomorrow.")
     body = ""
     if api_key:
         try:
             body = gemini_recap(api_key, reddit_items, sheet_rows,
-                                drive_files, date_label)
+                                notifier_files, date_label)
             log("gemini recap ok")
         except Exception as e:  # noqa: BLE001
             log(f"gemini recap failed, using fallback: {e}")
     if not body:
-        body = build_fallback(reddit_items, sheet_rows, drive_files)
+        body = build_fallback(reddit_items, sheet_rows, notifier_files)
     msg = f"{header}\n{body}"
     return msg[:1950]
 
@@ -304,28 +360,14 @@ def main() -> int:
         log(f"digest window: {len(reddit_items)} reddit items, "
             f"{len(new_rows)} new sheet rows.")
 
-    # Drive collection scan (published by the daily drive_digest_scan cron
-    # running in the agent environment, which holds the Drive connector).
-    drive_files: list | None = None
-    try:
-        dd = load_state("drive_digest.json", {})
-        gen = dd.get("generated_utc", "")
-        age_h = ((now - dt.datetime.fromisoformat(gen)).total_seconds() / 3600
-                 if gen else 1e9)
-        if age_h <= 36 and isinstance(dd.get("new_files"), list):
-            drive_files = dd["new_files"]
-            log(f"drive scan: {len(drive_files)} new collection files "
-                f"(age {age_h:.1f}h)")
-        else:
-            log(f"drive scan stale/missing (age {age_h:.1f}h); "
-                "section will show unavailable")
-    except Exception as e:  # noqa: BLE001
-        log(f"drive scan read failed: {e}")
+    # Collection files: read the 9am notifier's posted-log from its
+    # private repo (needs NOTIFIER_PAT).
+    notifier_files = fetch_notifier_log(env("NOTIFIER_PAT"), since)
 
     date_label = now.astimezone(
         dt.timezone(dt.timedelta(hours=-4))).strftime("%b %d")
     msg = build_message(date_label, reddit_items, new_rows,
-                        drive_files, env("GEMINI_API_KEY"))
+                        notifier_files, env("GEMINI_API_KEY"))
     if note:
         msg = f"{msg}\n_{note}_"
     msg = msg[:1950]
