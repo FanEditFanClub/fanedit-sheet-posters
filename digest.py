@@ -180,6 +180,50 @@ def fetch_notifier_log(pat: str, since: dt.datetime) -> list | None:
     return out
 
 
+def _gemini_models(api_key: str) -> list:
+    """Ask the API which flash models this key can actually use.
+
+    Model names retire fast (2.0 -> 2.5 -> 3.x in 2026), so resolve
+    dynamically instead of hardcoding. Falls back to the static list.
+    """
+    static = [m for m in GEMINI_MODELS if not m.startswith("models/")]
+    try:
+        req = urllib.request.Request(
+            "https://generativelanguage.googleapis.com/v1beta/models?"
+            "pageSize=100",
+            headers={"x-goog-api-key": api_key})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.load(r)
+        cands = []
+        for m in data.get("models", []):
+            name = m.get("name", "").replace("models/", "")
+            if ("generateContent" not in
+                    m.get("supportedGenerationMethods", [])):
+                continue
+            if "flash" not in name or "image" in name or "tts" in name \
+                    or "transcribe" in name or "live" in name:
+                continue
+            cands.append(name)
+        # prefer full flash over lite, newer generations first
+        cands.sort(key=lambda n: ("lite" in n, n), reverse=False)
+        full = [c for c in cands if "lite" not in c]
+        lite = [c for c in cands if "lite" in c]
+        ordered = full + lite
+        if ordered:
+            return ordered
+    except Exception as e:  # noqa: BLE001
+        log(f"gemini model list failed ({e}), using static list")
+    return static
+
+
+def _gemini_err_text(e: Exception) -> str:
+    try:
+        body = e.read().decode("utf-8", errors="replace")  # type: ignore
+        return f"{type(e).__name__} {getattr(e, 'code', '?')}: {body[:200]}"
+    except Exception:  # noqa: BLE001
+        return f"{type(e).__name__}: {e}"
+
+
 def gemini_recap(api_key: str, reddit_items: list, sheet_rows: list,
                  notifier_files: list | None, date_label: str) -> str:
     """Ask Gemini for a short Discord-formatted recap. Raises on failure."""
@@ -233,7 +277,7 @@ def gemini_recap(api_key: str, reddit_items: list, sheet_rows: list,
     }).encode()
 
     last_err = "no model tried"
-    for model in GEMINI_MODELS:
+    for model in _gemini_models(api_key):
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
                f"{model}:generateContent")
         req = urllib.request.Request(
@@ -249,7 +293,7 @@ def gemini_recap(api_key: str, reddit_items: list, sheet_rows: list,
                 return text
             last_err = f"{model}: empty response"
         except Exception as e:  # noqa: BLE001
-            last_err = f"{model}: {e}"
+            last_err = f"{model}: {_gemini_err_text(e)}"
             continue
     raise RuntimeError(f"gemini recap failed ({last_err})")
 
