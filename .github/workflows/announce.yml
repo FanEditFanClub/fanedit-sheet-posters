@@ -8,29 +8,54 @@ on:
 jobs:
   announce:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
     steps:
       - name: Post message via bot token
         env:
           BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           MESSAGE: ${{ inputs.message }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PYEOF'
-          import os, json, urllib.request
-          token = os.environ['BOT_TOKEN']
-          message = os.environ['MESSAGE']
-          guild_id = '1529915531736383702'
-          want = ''.join(c for c in '🌐discord-moderators' if ord(c) < 128)
-          auth = {'Authorization': 'Bot ' + token}
-          req = urllib.request.Request(
-              'https://discord.com/api/v10/guilds/%s/channels' % guild_id,
-              headers=auth)
-          channels = json.load(urllib.request.urlopen(req))
-          ch = next(c for c in channels if c.get('name') == want)
-          body = json.dumps({'content': message}).encode()
-          req = urllib.request.Request(
-              'https://discord.com/api/v10/channels/%s/messages' % ch['id'],
-              data=body,
-              headers=dict(auth, **{'Content-Type': 'application/json'}))
-          resp = json.load(urllib.request.urlopen(req))
-          print('posted message id:', resp['id'], 'channel:', ch['name'])
+          import os, json, traceback, urllib.request
+          def gh_issue(title, body):
+              data = json.dumps({'title': title, 'body': body}).encode()
+              req = urllib.request.Request(
+                  'https://api.github.com/repos/%s/issues' % os.environ['GH_REPO'],
+                  data=data,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Content-Type': 'application/json',
+                           'Accept': 'application/vnd.github+json'})
+              urllib.request.urlopen(req).read()
+          info = []
+          try:
+              token = os.environ.get('BOT_TOKEN', '')
+              message = os.environ['MESSAGE']
+              info.append('token_present=%s' % bool(token))
+              guild_id = '1529915531736383702'
+              want = ''.join(c for c in '🌐discord-moderators' if ord(c) < 128)
+              auth = {'Authorization': 'Bot ' + token}
+              req = urllib.request.Request(
+                  'https://discord.com/api/v10/guilds/%s/channels' % guild_id,
+                  headers=auth)
+              channels = json.load(urllib.request.urlopen(req))
+              info.append('channels_visible=%d' % len(channels))
+              match = [c for c in channels if c.get('name') == want]
+              info.append('target_found=%s' % bool(match))
+              if not match:
+                  raise RuntimeError('channel not found; visible=' + ','.join(str(c.get('name')) for c in channels[:25]))
+              ch = match[0]
+              body = json.dumps({'content': message}).encode()
+              req = urllib.request.Request(
+                  'https://discord.com/api/v10/channels/%s/messages' % ch['id'],
+                  data=body,
+                  headers=dict(auth, **{'Content-Type': 'application/json'}))
+              resp = json.load(urllib.request.urlopen(req))
+              print('POSTED id=%s channel=%s | %s' % (resp['id'], ch['name'], ' '.join(info)))
+          except Exception:
+              tb = traceback.format_exc().replace(os.environ.get('BOT_TOKEN') or 'NO_TOKEN_SET', '<token>')
+              gh_issue('announce debug: ' + ' '.join(info), '```\n' + tb[:3500] + '\n```')
+              raise
           PYEOF
