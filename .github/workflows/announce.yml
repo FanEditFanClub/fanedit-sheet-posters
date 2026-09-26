@@ -19,7 +19,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PYEOF'
-          import os, json, traceback, urllib.request
+          import os, json, traceback, urllib.request, urllib.error
           def gh_issue(title, body):
               data = json.dumps({'title': title, 'body': body}).encode()
               req = urllib.request.Request(
@@ -29,6 +29,16 @@ jobs:
                            'Content-Type': 'application/json',
                            'Accept': 'application/vnd.github+json'})
               urllib.request.urlopen(req).read()
+          def call(url, data=None):
+              headers = {'Authorization': 'Bot ' + os.environ.get('BOT_TOKEN', '')}
+              if data is not None:
+                  headers['Content-Type'] = 'application/json'
+              req = urllib.request.Request(url, data=data, headers=headers)
+              try:
+                  return json.load(urllib.request.urlopen(req))
+              except urllib.error.HTTPError as e:
+                  body = e.read().decode('utf-8', errors='replace')[:600]
+                  raise RuntimeError('HTTP %s on %s :: body=%s' % (e.code, url.split('api/v10/')[-1], body))
           info = []
           try:
               token = os.environ.get('BOT_TOKEN', '')
@@ -36,23 +46,15 @@ jobs:
               info.append('token_present=%s' % bool(token))
               guild_id = '1529915531736383702'
               want = ''.join(c for c in '🌐discord-moderators' if ord(c) < 128)
-              auth = {'Authorization': 'Bot ' + token}
-              req = urllib.request.Request(
-                  'https://discord.com/api/v10/guilds/%s/channels' % guild_id,
-                  headers=auth)
-              channels = json.load(urllib.request.urlopen(req))
+              channels = call('https://discord.com/api/v10/guilds/%s/channels' % guild_id)
               info.append('channels_visible=%d' % len(channels))
               match = [c for c in channels if c.get('name') == want]
               info.append('target_found=%s' % bool(match))
               if not match:
                   raise RuntimeError('channel not found; visible=' + ','.join(str(c.get('name')) for c in channels[:25]))
               ch = match[0]
-              body = json.dumps({'content': message}).encode()
-              req = urllib.request.Request(
-                  'https://discord.com/api/v10/channels/%s/messages' % ch['id'],
-                  data=body,
-                  headers=dict(auth, **{'Content-Type': 'application/json'}))
-              resp = json.load(urllib.request.urlopen(req))
+              resp = call('https://discord.com/api/v10/channels/%s/messages' % ch['id'],
+                          json.dumps({'content': message}).encode())
               print('POSTED id=%s channel=%s | %s' % (resp['id'], ch['name'], ' '.join(info)))
           except Exception:
               tb = traceback.format_exc().replace(os.environ.get('BOT_TOKEN') or 'NO_TOKEN_SET', '<token>')
