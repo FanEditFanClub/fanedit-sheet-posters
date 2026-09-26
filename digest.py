@@ -46,7 +46,15 @@ from destinations import (DestinationError, post_discord,
                           resolve_discord_channel_id)
 
 REDDIT_UA = "fanedit-digest/1.0 (by /u/faneditfanclub)"
-GEMINI_MODELS = ("gemini-2.5-flash", "gemini-2.0-flash")
+# Overridable without a code change: set GEMINI_MODEL in the workflow env.
+GEMINI_MODELS = tuple(
+    m for m in (
+        __import__("os").environ.get("GEMINI_MODEL", "").strip(),
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
+    )
+    if m
+)
 STATE_NAME = "digest.json"
 MAX_ITEMS_PER_SOURCE = 40
 
