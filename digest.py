@@ -2,8 +2,9 @@
 """Daily AI digest for #cyberchat: recap of the last 24h of fan-edit activity.
 
 Sources (same as the instant posters, read-only here):
-  - Reddit: the fan_edit_fan_club_reddit_feed multireddit RSS (items have
-    pubDates, so "last 24h" is exact).
+  - Reddit: the fan_edit_fan_club_reddit_feed multireddit scan JSON
+    (published by the daily 5pm ET browser scan; items carry exact
+    timestamps, so "last 24h" is exact).
   - Sheet: the Fan Edit Central Database 'Newest Additions' tab. New rows
     append at the bottom, so a row-count watermark captures "since yesterday".
   - Collection: the 9am notifier's posted-log
@@ -39,14 +40,12 @@ import base64
 import sys
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
 
 from common import env, load_config, load_state, save_state, log
 from destinations import (DestinationError, post_discord,
                           resolve_discord_channel_id,
                           resolve_discord_user_mention)
 
-REDDIT_UA = "fanedit-digest/1.0 (by /u/faneditfanclub)"
 # Overridable without a code change: set GEMINI_MODEL in the workflow env.
 GEMINI_MODELS = tuple(
     m for m in (
@@ -84,43 +83,26 @@ def norm(v: str) -> str:
     return " ".join(v.split())
 
 
-def fetch_reddit_items(rss_url: str, since: dt.datetime) -> list:
-    """RSS items newer than `since`. Descriptive UA or Reddit 403s.
+REDDIT_UA = "fanedit-digest/1.0 (by /u/faneditfanclub)"
 
-    Reddit rate-limits aggressively; retry 429/5xx with backoff.
+
+def fetch_scan_items(scan_url: str, since: dt.datetime) -> list:
+    """Scan-JSON items newer than `since`.
+
+    The daily 5pm ET browser scan publishes the multireddit listing to
+    GitHub Pages (Reddit's public RSS died 2026-11-13). Same return shape
+    as the old RSS reader: [{title, url, published}].
     """
-    import time
-    last_err: Exception | None = None
-    for attempt in range(4):
-        req = urllib.request.Request(rss_url, headers={"User-Agent": REDDIT_UA})
-        try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                raw = r.read()
-            break
-        except urllib.error.HTTPError as e:
-            last_err = e
-            if e.code in (429, 500, 502, 503, 504) and attempt < 3:
-                wait = 15 * (attempt + 1)
-                log(f"reddit {e.code}, retrying in {wait}s "
-                    f"(attempt {attempt + 1}/4)")
-                time.sleep(wait)
-                continue
-            raise
-    else:
-        raise last_err  # type: ignore[misc]
-    # NOTE: Reddit's .rss endpoints serve Atom, not RSS 2.0.
-    ns = {"a": "http://www.w3.org/2005/Atom"}
-    root = ET.fromstring(raw)
+    req = urllib.request.Request(scan_url, headers={"User-Agent": REDDIT_UA})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = json.load(r)
     items = []
-    for entry in root.findall("a:entry", ns):
-        title_el = entry.find("a:title", ns)
-        link_el = entry.find("a:link", ns)
-        updated_el = entry.find("a:updated", ns)
-        title = (title_el.text or "").strip() if title_el is not None else ""
-        link = link_el.get("href", "").strip() if link_el is not None else ""
+    for p in data.get("posts", []):
+        title = (p.get("title") or "").strip()
+        link = (p.get("url") or "").strip()
         try:
             published = dt.datetime.fromisoformat(
-                (updated_el.text or "").strip().replace("Z", "+00:00"))
+                (p.get("published") or "").strip().replace("Z", "+00:00"))
             if published.tzinfo is None:
                 published = published.replace(tzinfo=dt.timezone.utc)
         except (TypeError, ValueError, AttributeError):
@@ -419,7 +401,7 @@ def main() -> int:
     since = min(since, now)
 
     try:
-        reddit_items = fetch_reddit_items(cfg["reddit"]["rss_url"], since)
+        reddit_items = fetch_scan_items(cfg["reddit"]["scan_url"], since)
     except Exception as e:  # noqa: BLE001
         log(f"reddit read failed: {e}")
         reddit_items = None
