@@ -207,26 +207,27 @@ def _gemini_err_text(e: Exception) -> str:
         return f"{type(e).__name__}: {e}"
 
 
-def gemini_recap(api_key: str, mention: str, reddit_items: list,
+def gemini_recap(api_key: str, reddit_items: list,
                  sheet_rows: list, notifier_files: list | None,
                  date_label: str) -> str:
-    """Ask Gemini for a short Discord-formatted recap. Raises on failure."""
-    head = f"**{mention} Daily Bot Channel Recap \U0001f916**"
+    """Ask Gemini for the recap paragraph ONLY (no headline). The headline is
+    prepended deterministically by build_message - never trust the model with
+    markup, it mangles the bold markers (seen 2026-10-08: literal ** posted).
+    Raises on failure."""
     lines = [
         "You are the Optimus bot writing the daily recap for the Fan Edit",
         "Fan Club Discord server.",
         "",
-        "OUTPUT FORMAT - follow exactly:",
-        f"Line 1 (the headline, copy verbatim): {head}",
-        "Line 2: blank line",
-        "Line 3: ONE single paragraph of casual, hype, fan-community chat",
+        "OUTPUT - follow exactly:",
+        "Write ONE single paragraph of casual, hype, fan-community chat",
         "about what was new in the bot channels since yesterday's post.",
+        "Output ONLY the paragraph text - no headline, no title line,",
+        "no bold markers, no bullet points, no numbered lists, no line breaks.",
         "",
         "HARD RULES:",
-        "- No bullet points, no numbered lists, no line breaks inside the",
-        "  paragraph - one flowing paragraph only.",
+        "- One flowing paragraph only.",
         "- No links or URLs anywhere in the paragraph.",
-        "- No markdown headings.",
+        "- No markdown formatting at all (no **, no headings).",
         "- Keep the paragraph under 700 characters.",
         "- Mention the most interesting new items by name (titles, editors).",
         "- Skip any source with nothing new - do not announce emptiness,",
@@ -345,18 +346,28 @@ def build_message(mention: str, date_label: str, reddit_items: list,
         return (head + "\n\nQuiet day in the bot channels - nothing new "
                 "dropped in the last 24 hours. The feeds are watching, "
                 "see you tomorrow.")
-    body = ""
+    para = ""
     if api_key:
         try:
-            body = gemini_recap(api_key, mention, reddit_items, sheet_rows,
+            para = gemini_recap(api_key, reddit_items, sheet_rows,
                                 notifier_files, date_label)
             log("gemini recap ok")
         except Exception as e:  # noqa: BLE001
             log(f"gemini recap failed, using fallback: {e}")
-    if not body:
-        body = build_fallback(mention, reddit_items, sheet_rows,
-                              notifier_files)
-    return body[:1950]
+    if not para:
+        return build_fallback(mention, reddit_items, sheet_rows,
+                              notifier_files)[:1950]
+    # Defensive cleanup: the model is asked for a bare paragraph, but if it
+    # emits a headline line or markdown anyway, strip it - the real headline
+    # is prepended deterministically below so it can never render broken.
+    lines = [ln.strip() for ln in para.strip().splitlines() if ln.strip()]
+    if lines and "daily bot channel recap" in lines[0].lower():
+        lines = lines[1:]
+    para = " ".join(lines).replace("**", "").strip()
+    if not para:
+        return build_fallback(mention, reddit_items, sheet_rows,
+                              notifier_files)[:1950]
+    return f"{head}\n\n{para}"[:1950]
 
 
 # ----------------------------------------------------------------- main
