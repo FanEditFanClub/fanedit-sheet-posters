@@ -14,6 +14,10 @@ on:
         description: "Channel name override for manual_message (default: the digest channel)"
         required: false
         default: ""
+      dry_run:
+        description: "Generate and log the digest but do NOT post or save state"
+        type: boolean
+        default: false
 permissions:
   contents: write
 concurrency:
@@ -39,6 +43,7 @@ jobs:
           DISCORD_DIGEST_CHANNEL: 📐cyber-chat💬
           MANUAL_MESSAGE: ${{ inputs.manual_message }}
           MANUAL_CHANNEL: ${{ inputs.manual_channel }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           DISCORD_ERROR_CHANNEL: discord-moderators
           GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPO: ${{ github.repository }}

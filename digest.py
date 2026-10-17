@@ -109,6 +109,8 @@ def fetch_scan_items(scan_url: str, since: dt.datetime) -> list:
             continue
         if published >= since and title:
             items.append({"title": title, "url": link,
+                          "subreddit": (p.get("subreddit") or "").strip(),
+                          "author": (p.get("author") or "").strip(),
                           "published": published.isoformat()})
     items.sort(key=lambda i: i["published"])
     return items
@@ -188,7 +190,7 @@ def _gemini_models(api_key: str) -> list:
                 continue
             cands.append(name)
         # prefer full flash over lite, newer generations first
-        cands.sort(key=lambda n: ("lite" in n, n), reverse=False)
+        cands.sort(key=lambda n: n, reverse=True)  # newest generation first
         full = [c for c in cands if "lite" not in c]
         lite = [c for c in cands if "lite" in c]
         ordered = full + lite
@@ -219,16 +221,18 @@ def gemini_recap(api_key: str, reddit_items: list,
         "Fan Club Discord server.",
         "",
         "OUTPUT - follow exactly:",
-        "Write ONE single paragraph of casual, hype, fan-community chat",
-        "about what was new in the bot channels since yesterday's post.",
+        "Write ONE paragraph of 2-4 sentences of casual, hype, fan-community",
+        "chat about what was new in the bot channels since yesterday's post.",
         "Output ONLY the paragraph text - no headline, no title line,",
         "no bold markers, no bullet points, no numbered lists, no line breaks.",
+        "(A separate 'Top picks' link list is appended automatically.)",
         "",
         "HARD RULES:",
-        "- One flowing paragraph only.",
-        "- No links or URLs anywhere in the paragraph.",
+        "- One flowing paragraph of 2-4 sentences.",
         "- No markdown formatting at all (no **, no headings).",
-        "- Keep the paragraph under 700 characters.",
+        "- Be specific: name titles, which subreddit they came from, and",
+        "  editors/authors when given; group similar items (e.g. several",
+        "  Marvel edits) and call out anything standout.",
         "- Mention the most interesting new items by name (titles, editors).",
         "- Skip any source with nothing new - do not announce emptiness,",
         "  just don't mention it.",
@@ -243,7 +247,11 @@ def gemini_recap(api_key: str, reddit_items: list,
     ]
     if reddit_items:
         for it in reddit_items[:MAX_ITEMS_PER_SOURCE]:
-            lines.append(f"- {it['title']} - {it['url']}")
+            sub = it.get("subreddit", "")
+            au = it.get("author", "")
+            tag = f"[r/{sub}] " if sub else ""
+            by = f" (posted by u/{au})" if au else ""
+            lines.append(f"- {tag}{it['title']}{by}")
     else:
         lines.append("(none)")
     lines.append("")
@@ -270,30 +278,44 @@ def gemini_recap(api_key: str, reddit_items: list,
         lines.append("(none)")
 
     prompt = "\n".join(lines)
-    body = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": 600, "temperature": 0.7},
-    }).encode()
+    def _body(thinking_off: bool) -> bytes:
+        gen = {"maxOutputTokens": 2048, "temperature": 0.7}
+        if thinking_off:
+            gen["thinkingConfig"] = {"thinkingBudget": 0}
+        return json.dumps({"contents": [{"parts": [{"text": prompt}]}],
+                           "generationConfig": gen}).encode()
 
-    last_err = "no model tried"
-    for model in _gemini_models(api_key):
+    def _call(model: str, body: bytes) -> str:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
                f"{model}:generateContent")
         req = urllib.request.Request(
             url, data=body,
             headers={"Content-Type": "application/json",
                      "x-goog-api-key": api_key})
-        try:
-            with urllib.request.urlopen(req, timeout=90) as r:
-                resp = json.load(r)
-            text = (resp["candidates"][0]["content"]["parts"][0]["text"]
-                    .strip())
-            if text:
-                return text
-            last_err = f"{model}: empty response"
-        except Exception as e:  # noqa: BLE001
-            last_err = f"{model}: {_gemini_err_text(e)}"
-            continue
+        with urllib.request.urlopen(req, timeout=90) as r:
+            resp = json.load(r)
+        parts = resp["candidates"][0]["content"].get("parts", [])
+        return "".join(p.get("text", "") for p in parts
+                       if not p.get("thought")).strip()
+
+    last_err = "no model tried"
+    for model in _gemini_models(api_key):
+        text = ""
+        # Try with thinking disabled first; some models reject
+        # thinkingConfig / a zero budget (HTTP 400), so retry without it.
+        for thinking_off in (True, False):
+            try:
+                text = _call(model, _body(thinking_off))
+                if text:
+                    break
+                last_err = f"{model}: empty response"
+            except Exception as e:  # noqa: BLE001
+                last_err = f"{model}: {_gemini_err_text(e)}"
+                if getattr(e, "code", None) != 400:
+                    break
+        if text:
+            log(f"gemini model used: {model}")
+            return text
     raise RuntimeError(f"gemini recap failed ({last_err})")
 
 
@@ -335,7 +357,8 @@ def build_fallback(mention: str, reddit_items: list, sheet_rows: list,
     else:
         para = ("Quiet day in the bot channels - nothing new dropped in the "
                 "last 24 hours. The feeds are watching, see you tomorrow.")
-    return f"{head}\n\n{para}"
+    picks = top_picks(reddit_items)
+    return f"{head}\n\n{para}" + (f"\n\n{picks}" if picks else "")
 
 
 def build_message(mention: str, date_label: str, reddit_items: list,
@@ -367,7 +390,17 @@ def build_message(mention: str, date_label: str, reddit_items: list,
     if not para:
         return build_fallback(mention, reddit_items, sheet_rows,
                               notifier_files)[:1950]
-    return f"{head}\n\n{para}"[:1950]
+    picks = top_picks(reddit_items)
+    return (f"{head}\n\n{para}" + (f"\n\n{picks}" if picks else ""))[:1950]
+
+
+def top_picks(reddit_items: list, n: int = 5) -> str:
+    """Up to n newest Reddit items as masked links; <url> suppresses embeds."""
+    if not reddit_items:
+        return ""
+    rows = [f"\u2022 [{norm(i['title'])[:120]}](<{i['url']}>)"
+            for i in reversed(reddit_items[-n:]) if i.get("url")]
+    return ("**Top picks:**\n" + "\n".join(rows)) if rows else ""
 
 
 # ----------------------------------------------------------------- main
@@ -455,12 +488,14 @@ def main() -> int:
 
     date_label = now.astimezone(
         dt.timezone(dt.timedelta(hours=-4))).strftime("%b %d")
-    mention = resolve_discord_user_mention(token, "faneditfanclub")
+    mention = ("@FanEditFanClub" if dry and not token
+               else resolve_discord_user_mention(token, "faneditfanclub"))
     msg = build_message(mention, date_label, reddit_items, new_rows,
                         notifier_files, env("GEMINI_API_KEY"))
     if note:
         msg = f"{msg}\n_{note}_"
     msg = msg[:1950]
+    log("digest message:\n" + msg)
 
     if dry:
         print("=" * 60)
