@@ -23,7 +23,7 @@ VERIFY_DEFAULT = {
     "reddit": {"discord_notified": True, "x_notified": True,
                "facebook_notified": True},
     "sheet": {"discord_notified": False, "x_notified": False,
-              "facebook_notified": False},
+              "facebook_notified": False, "threads_notified": False},
 }
 
 

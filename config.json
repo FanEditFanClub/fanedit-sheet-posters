@@ -17,7 +17,8 @@
     "reddit_channel": "reddit-fan-edits-feed"
   },
   "buffer": {
-    "channel_name": "FanEditFanClub X Free Profile"
+    "channel_name": "FanEditFanClub X Free Profile",
+    "threads_channel_name": "faneditfanclub"
   },
   "facebook": {
     "page_id": "1240699955783812",

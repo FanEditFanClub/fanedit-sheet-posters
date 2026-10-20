@@ -1,4 +1,4 @@
-"""Post to Discord / Buffer (X) / Facebook Page using env-var tokens.
+"""Post to Discord / Buffer (X and Threads) / Facebook Page using env-var tokens.
 
 Secrets (set as env vars on Render):
   DISCORD_BOT_TOKEN  -> Discord bot token (Authorization: Bot <token>)
@@ -8,7 +8,7 @@ Secrets (set as env vars on Render):
 
 Discord channel ids are resolved at runtime from channel names and cached in
 state/discord_channels.json. Buffer channel ids are cached in
-state/buffer_profile.json.
+state/buffer_profile.json (X) and state/buffer_threads_profile.json (Threads).
 """
 from __future__ import annotations
 
@@ -263,6 +263,122 @@ def post_buffer_x(token: str, profile_id: str, text: str) -> bool:
     payload = data.get("createPost") or {}
     post = payload.get("post") or {}
     log(f"buffer: posted {post.get('id')} status={post.get('status')}")
+    return True
+
+
+# Threads rejects a post over 500 characters. Longer copy is the same text
+# as the X post, split into a Buffer thread (each part replies to the previous).
+THREADS_CHAR_LIMIT = 500
+
+
+def split_threads_text(text: str, limit: int = THREADS_CHAR_LIMIT) -> list[str]:
+    """Split `text` into pieces of at most `limit` characters.
+
+    Pieces concatenate back to the original string. Breaks fall on whitespace
+    when a piece would otherwise cut a word; a single token longer than
+    `limit` is hard-cut.
+    """
+    if limit < 1:
+        raise DestinationError("threads: character limit must be positive")
+    if len(text) <= limit:
+        return [text]
+    parts: list[str] = []
+    rest = text
+    while rest:
+        if len(rest) <= limit:
+            parts.append(rest)
+            break
+        window = rest[:limit]
+        cut = max(window.rfind(" "), window.rfind("\n"), window.rfind("\t"))
+        if cut <= 0:
+            cut = limit
+        else:
+            cut += 1  # keep the breakpoint whitespace on this piece
+        parts.append(rest[:cut])
+        rest = rest[cut:]
+    return parts
+
+
+def resolve_buffer_threads_profile_id(token: str, channel_name: str) -> str:
+    """Resolve the Buffer channel id for Threads, caching it in state."""
+    cache = os.path.join(STATE_DIR, "buffer_threads_profile.json")
+    if os.path.exists(cache):
+        with open(cache) as f:
+            pid = json.load(f).get("profile_id", "")
+        if pid:
+            return pid
+    data = _buffer_gql(
+        token, "query { account { organizations { id name } } }",
+        None, "buffer account")
+    orgs = (data.get("account") or {}).get("organizations") or []
+    if not orgs:
+        raise DestinationError("buffer: no organizations on this token")
+    want = channel_name.lower().replace(" ", "")
+    threads = []
+    for org in orgs:
+        ch = _buffer_gql(
+            token,
+            "query($orgId: OrganizationId!) { channels(input: "
+            "{organizationId: $orgId}) { id name service } }",
+            {"orgId": org["id"]}, "buffer channels")
+        for c in ch.get("channels") or []:
+            if str(c.get("service", "")).lower() == "threads":
+                threads.append(c)
+    if not threads:
+        raise DestinationError(
+            "buffer: no Threads channel found on the token")
+    pid = ""
+    for c in threads:
+        name = str(c.get("name", "")).lower().replace(" ", "")
+        if want and (want in name or name in want):
+            pid = c["id"]
+            break
+    if not pid:
+        pid = threads[0]["id"]
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(cache, "w") as f:
+        json.dump({"profile_id": pid, "channel_name": channel_name}, f)
+    log(f"buffer: resolved Threads channel {pid}")
+    return pid
+
+
+def post_buffer_threads(token: str, profile_id: str, text: str) -> bool:
+    """Publish the X post text to Threads, chaining parts to stay within 500."""
+    if not profile_id:
+        raise DestinationError("buffer threads: no profile id")
+    parts = split_threads_text(text)
+    payload: dict = {
+        "channelId": profile_id,
+        "text": parts[0],
+        "mode": "shareNow",
+        "schedulingType": "automatic",
+        "needsApproval": False,
+        "assets": [],
+    }
+    if len(parts) > 1:
+        # The thread array is the source of truth and must include the root.
+        payload["metadata"] = {
+            "threads": {
+                "thread": [{"text": part, "assets": []} for part in parts],
+            }
+        }
+    data = _buffer_gql(
+        token,
+        "mutation($input: CreatePostInput!) { createPost(input: $input) "
+        "{ __typename ... on PostActionSuccess { post { id status } } "
+        "... on MutationError { message } } }",
+        {"input": payload},
+        "buffer threads createPost")
+    result = data.get("createPost") or {}
+    if result.get("__typename") not in (None, "", "PostActionSuccess"):
+        raise DestinationError(
+            f"buffer threads: {result.get('message') or result.get('__typename')}")
+    post = result.get("post") or {}
+    if not post.get("id"):
+        raise DestinationError(
+            f"buffer threads: no post id: {str(result)[:200]}")
+    log(f"buffer threads: posted {post.get('id')} status={post.get('status')} "
+        f"parts={len(parts)}")
     return True
 
 

@@ -10,14 +10,15 @@ never blasted out. Returns a report dict; run.py aggregates and alerts.
 from __future__ import annotations
 
 import csv
-import copy
 import io
 import urllib.parse
 import urllib.request
 
 from common import env, load_config, load_state, save_state, log
-from destinations import (DestinationError, post_buffer_x, post_discord,
-                          post_facebook_page, resolve_buffer_profile_id,
+from destinations import (DestinationError, post_buffer_threads, post_buffer_x,
+                          post_discord, post_facebook_page,
+                          resolve_buffer_profile_id,
+                          resolve_buffer_threads_profile_id,
                           resolve_discord_channel_id)
 
 DESTS = ("discord", "x", "facebook")
@@ -65,10 +66,15 @@ def run(cfg: dict, ctx: dict) -> dict:
 
     verify = load_state("first_live_verify.json", {})
     # Merge in defaults defensively: a missing or partial verify file must
-    # never crash a run (KeyError after posts already went out). deepcopy so
-    # we never mutate the shared VERIFY_DEFAULT in ctx.
+    # never crash a run (KeyError after posts already went out). Fill only
+    # missing flags so an existing true/false is left alone.
     for _job, _flags in ctx["verify_default"].items():
-        verify.setdefault(_job, copy.deepcopy(_flags))
+        slot = verify.setdefault(_job, {})
+        if not isinstance(slot, dict):
+            slot = {}
+            verify[_job] = slot
+        for _flag, _default in _flags.items():
+            slot.setdefault(_flag, _default)
     new_rows = [r for r in rows if row_key(r) not in seen]
     if new_rows and not ctx.get("buffer_pid"):
         try:
@@ -76,8 +82,20 @@ def run(cfg: dict, ctx: dict) -> dict:
                 ctx["buffer_token"], cfg["buffer"]["channel_name"])
         except DestinationError as e:
             report["errors"].append(f"buffer profile resolve: {e}")
+    if new_rows and not ctx.get("buffer_threads_pid"):
+        try:
+            ctx["buffer_threads_pid"] = resolve_buffer_threads_profile_id(
+                ctx["buffer_token"],
+                cfg["buffer"].get("threads_channel_name", "faneditfanclub"))
+        except DestinationError as e:
+            report["errors"].append(f"buffer threads profile resolve: {e}")
+
+    # Keys whose Discord / X / Facebook posts already succeeded. Threads is
+    # retried alone so a Threads failure does not post those channels again.
+    pending = set(st.get("threads_pending") or [])
 
     for r in new_rows:
+        key = row_key(r)
         norm = lambda v: " ".join(v.split())
         editor = norm(r[1]) if len(r) > 1 else ""
         title = norm(r[2])
@@ -85,36 +103,57 @@ def run(cfg: dict, ctx: dict) -> dict:
         tpl = cfg["templates"]["sheet"]
         texts = {d: tpl[d].format(editor=editor, title=title, original=original)
                  for d in DESTS}
+        # Threads uses the X copy verbatim (same template, same fields).
+        threads_text = texts["x"]
+        already = key in pending
         results: dict = {}
-        for d in DESTS:
-            try:
-                if d == "discord":
-                    post_discord(ctx["discord_token"],
-                                 ctx["discord_sheet_cid"], texts[d])
-                elif d == "x":
-                    post_buffer_x(ctx["buffer_token"],
-                                  ctx["buffer_pid"], texts[d])
-                else:
-                    post_facebook_page(ctx["fb_token"], ctx["fb_page_id"],
-                                       texts[d], link=FB_LINK)
-                results[d] = True
-            except Exception as e:  # noqa: BLE001
-                results[d] = f"ERROR: {e}"
-        if all(v is True for v in results.values()):
-            seen.add(row_key(r))
-            report["new_posts"] += 1
-            for dest, flag in (("discord", "discord_notified"),
-                               ("x", "x_notified"),
-                               ("facebook", "facebook_notified")):
-                if not verify["sheet"][flag]:
-                    verify["sheet"][flag] = True
-                    report["handoffs"].append(f"sheet.{dest}")
-        else:
-            for dest, res in results.items():
-                if res is not True:
-                    report["errors"].append(f"sheet->{dest}: {res}")
+        if not already:
+            for d in DESTS:
+                try:
+                    if d == "discord":
+                        post_discord(ctx["discord_token"],
+                                     ctx["discord_sheet_cid"], texts[d])
+                    elif d == "x":
+                        post_buffer_x(ctx["buffer_token"],
+                                      ctx["buffer_pid"], texts[d])
+                    else:
+                        post_facebook_page(ctx["fb_token"], ctx["fb_page_id"],
+                                           texts[d], link=FB_LINK)
+                    results[d] = True
+                except Exception as e:  # noqa: BLE001
+                    results[d] = f"ERROR: {e}"
+            if not all(v is True for v in results.values()):
+                for dest, res in results.items():
+                    if res is not True:
+                        report["errors"].append(f"sheet->{dest}: {res}")
+                continue
+        try:
+            post_buffer_threads(ctx["buffer_token"],
+                                ctx.get("buffer_threads_pid", ""),
+                                threads_text)
+        except Exception as e:  # noqa: BLE001
+            pending.add(key)
+            report["errors"].append(f"sheet->threads: ERROR: {e}")
+            continue
+        pending.discard(key)
+        seen.add(key)
+        report["new_posts"] += 1
+        for dest, flag in (("discord", "discord_notified"),
+                           ("x", "x_notified"),
+                           ("facebook", "facebook_notified"),
+                           ("threads", "threads_notified")):
+            if not verify["sheet"].get(flag):
+                verify["sheet"][flag] = True
+                report["handoffs"].append(f"sheet.{dest}")
 
     st["seen_keys"] = sorted(seen)
+    # Drop markers for rows that are already seen or no longer in the sheet.
+    live = {row_key(r) for r in rows}
+    pending = {k for k in pending if k in live and k not in seen}
+    if pending:
+        st["threads_pending"] = sorted(pending)
+    else:
+        st.pop("threads_pending", None)
     save_state("seen_sheet.json", st)
     save_state("first_live_verify.json", verify)
     return report
