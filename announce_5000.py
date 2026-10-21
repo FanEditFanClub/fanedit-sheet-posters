@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """One-off 5,000 files milestone announcement.
 
-Posts to: Discord #cyber-chat (Optimus bot), X (Buffer), Facebook Page (Graph API).
+Posts to: Discord #cyber-chat (via "Fan Edit Fan Club" webhook, falls back to
+Optimus bot), X (Buffer), Facebook Page (Graph API).
 Triggered manually via workflow_dispatch for the 11:00 AM announcement.
 """
 from __future__ import annotations
 
+import json
 import sys
+import urllib.request
 
 from common import env, log
 from destinations import (
@@ -32,6 +35,46 @@ X_TEXT = ("\U0001f3ac MILESTONE! THE WORLD'S LARGEST FAN EDIT COLLECTION now has
 
 FB_TEXT = DISCORD_TEXT.replace("**", "")
 
+WEBHOOK_NAME = "Fan Edit Fan Club"
+
+
+def _discord_api(token: str, path: str, method: str = "GET",
+                 body: dict | None = None) -> dict:
+    req = urllib.request.Request(
+        f"https://discord.com/api/v10{path}", method=method,
+        data=json.dumps(body).encode() if body else None,
+        headers={"Authorization": f"Bot {token}",
+                 "Content-Type": "application/json",
+                 "User-Agent": "fanedit/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        raw = r.read().decode("utf-8", errors="replace")
+        return json.loads(raw) if raw else {}
+
+
+def post_via_club_webhook(token: str, channel_id: str, text: str) -> bool:
+    """Post to channel via a 'Fan Edit Fan Club' webhook; create if missing."""
+    hooks = _discord_api(token, f"/channels/{channel_id}/webhooks")
+    if not isinstance(hooks, list):
+        raise DestinationError(f"webhook list failed: {str(hooks)[:150]}")
+    hook = next((h for h in hooks if h.get("name") == WEBHOOK_NAME), None)
+    if not hook:
+        hook = _discord_api(token, f"/channels/{channel_id}/webhooks",
+                            "POST", {"name": WEBHOOK_NAME})
+        if not hook.get("token"):
+            raise DestinationError(
+                f"webhook create failed: {str(hook)[:150]}")
+        log("created 'Fan Edit Fan Club' webhook")
+    wid, wtoken = hook["id"], hook["token"]
+    req = urllib.request.Request(
+        f"https://discord.com/api/v10/webhooks/{wid}/{wtoken}",
+        method="POST", data=json.dumps({"content": text[:2000]}).encode(),
+        headers={"Content-Type": "application/json",
+                 "User-Agent": "fanedit/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        if r.status not in (200, 204):
+            raise DestinationError(f"webhook post HTTP {r.status}")
+    return True
+
 
 def main() -> int:
     dry = env("DRY_RUN") == "1"
@@ -41,18 +84,23 @@ def main() -> int:
     fb_page_id = env("FACEBOOK_PAGE_ID", "1240699955783812")
 
     if dry:
-        print("=== DISCORD ===\n" + DISCORD_TEXT)
+        print("=== DISCORD (via Fan Edit Fan Club webhook) ===\n" + DISCORD_TEXT)
         print("\n=== X ===\n" + X_TEXT)
         print("\n=== FB PAGE ===\n" + FB_TEXT)
         return 0
 
     errors = []
 
-    # Discord #cyber-chat
+    # Discord #cyber-chat via "Fan Edit Fan Club" webhook (fallback: bot)
     try:
         cid = resolve_discord_channel_id(bot_token, "cyber-chat")
-        post_discord(bot_token, cid, DISCORD_TEXT[:2000])
-        log("discord #cyber-chat: posted")
+        try:
+            post_via_club_webhook(bot_token, cid, DISCORD_TEXT)
+            log("discord #cyber-chat: posted via Fan Edit Fan Club webhook")
+        except Exception as e:  # noqa: BLE001
+            log(f"webhook failed ({e}); falling back to bot post")
+            post_discord(bot_token, cid, DISCORD_TEXT[:2000])
+            log("discord #cyber-chat: posted via bot (fallback)")
     except Exception as e:  # noqa: BLE001
         errors.append(f"discord: {e}")
         log(f"discord FAILED: {e}")
