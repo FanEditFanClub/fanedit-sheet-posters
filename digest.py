@@ -15,10 +15,11 @@ Sources (same as the instant posters, read-only here):
 
 The item lists go to the Gemini API (free tier) for a short hype-style recap,
 posted to Discord as the Optimus bot. Deterministic count lines are always
-appended: new Fan Edit Fan Club Collection files (a Discord channel mention,
-never a file or Drive link) and new Fan Edit Central Database rows. If Gemini
-is unavailable the digest still goes out as plain prose plus those counts.
-Quiet days get a one-line note. Reddit Top picks keep their links.
+appended: new Fan Edit Fan Club Collection files and new Fan Edit Central
+Database rows. Each count names its Discord channel as a <#id> mention,
+never a file or Drive link. If Gemini is unavailable the digest still goes
+out as plain prose plus those counts. Quiet days get a one-line note.
+Reddit Top picks keep their links.
 
 Env:
   DISCORD_BOT_TOKEN   (required) - bot token
@@ -30,6 +31,11 @@ Env:
   COLLECTION_DISCORD_CHANNEL_ID (optional) - overrides the Collection channel
                       mention. Otherwise config.json collection.discord_channel_id
                       is used, then the notifier repo's channel/webhook config.
+  DATABASE_DISCORD_CHANNEL_ID (optional) - overrides the Central Database
+                      channel mention. Otherwise config.json
+                      database.discord_channel_id is used, then the bot-visible
+                      text channel named in discord.sheet_channel (where the
+                      sheet poster posts new rows).
   DISCORD_DIGEST_CHANNEL (default "cyberchat")
   DISCORD_ERROR_CHANNEL  - errors surface here
   GITHUB_PAT / GITHUB_REPO / GITHUB_BRANCH - state persistence (same as run.py)
@@ -536,6 +542,43 @@ def resolve_collection_mention(pat: str, token: str, cfg: dict) -> str:
     return "the Fan Edit Fan Club Collection"
 
 
+def resolve_database_mention(token: str, cfg: dict) -> str:
+    """Discord <#id> mention for the Fan Edit Central Database channel.
+
+    The pinned id is the text channel the sheet poster writes to
+    (discord.sheet_channel). When the pin is absent, that same name is
+    resolved from the channels visible to the bot.
+    """
+    pinned = str(
+        env("DATABASE_DISCORD_CHANNEL_ID")
+        or (cfg.get("database") or {}).get("discord_channel_id")
+        or "").strip()
+    if re.fullmatch(r"\d{17,20}", pinned):
+        name = _channel_name(token, pinned, {})
+        log(f"database channel pinned: {pinned}"
+            + (f" (#{name})" if name else ""))
+        return f"<#{pinned}>"
+    channel_name = str(
+        (cfg.get("discord") or {}).get("sheet_channel")
+        or "fan-edit-central-database")
+    cid = ""
+    if token:
+        try:
+            cid = resolve_discord_channel_id(token, channel_name)
+        except DestinationError as e:
+            log("database channel lookup failed: "
+                + _redact(f"{type(e).__name__}: {e}")[:200])
+    if re.fullmatch(r"\d{17,20}", str(cid)):
+        name = _channel_name(token, cid, {})
+        log(f"database channel resolved: {cid}"
+            + (f" (#{name})" if name else "")
+            + f" via #{channel_name}")
+        return f"<#{cid}>"
+    log("WARNING: Fan Edit Central Database Discord channel id was not "
+        "found; count line will name the channel in text")
+    return ""
+
+
 def _gemini_models(api_key: str) -> list:
     """Ask the API which flash models this key can actually use.
 
@@ -704,11 +747,13 @@ def gemini_recap(api_key: str, reddit_items: list,
 # -------------------------------------------------------------- message
 
 def source_bullets(sheet_rows: list, notifier_files: list | None,
-                   collection_mention: str) -> str:
-    """Per-source counts. Collection is a <#id> mention, never a file link.
+                   collection_mention: str, database_mention: str) -> str:
+    """Per-source counts. Both channels are <#id> mentions, never file links.
 
     Database count is always shown, including 0. The collection line is
     omitted only when the notifier log could not be read (unknown, not zero).
+    The database "in <#id>" clause is omitted only when that channel id
+    could not be resolved.
     """
     lines = []
     if notifier_files is not None:
@@ -718,15 +763,16 @@ def source_bullets(sheet_rows: list, notifier_files: list | None,
             f"\u2022 \U0001f4c1 {n} new {word} added to {collection_mention}")
     n = len(sheet_rows or [])
     word = "row" if n == 1 else "rows"
+    where = f" in {database_mention}" if database_mention else ""
     lines.append(
         "\u2022 \U0001f4ca "
-        f"{n} new {word} added to the Fan Edit Central Database")
+        f"{n} new {word} added to the Fan Edit Central Database{where}")
     return "\n".join(lines)
 
 
 def assemble_message(head: str, para: str, reddit_items: list,
                      sheet_rows: list, notifier_files: list | None,
-                     collection_mention: str) -> str:
+                     collection_mention: str, database_mention: str) -> str:
     """Headline, prose, count bullets, then Reddit Top picks.
 
     Prose is scrubbed of every URL so a model or filename cannot leak a
@@ -734,7 +780,8 @@ def assemble_message(head: str, para: str, reddit_items: list,
     """
     para = strip_prohibited_links(para)
     parts = [head, "", para]
-    bullets = source_bullets(sheet_rows, notifier_files, collection_mention)
+    bullets = source_bullets(sheet_rows, notifier_files, collection_mention,
+                             database_mention)
     if bullets:
         parts.extend(["", bullets])
     picks = top_picks(reddit_items)
@@ -745,7 +792,7 @@ def assemble_message(head: str, para: str, reddit_items: list,
 
 def build_fallback(mention: str, reddit_items: list, sheet_rows: list,
                    notifier_files: list | None,
-                   collection_mention: str) -> str:
+                   collection_mention: str, database_mention: str) -> str:
     """Plain-prose fallback when Gemini is unavailable.
 
     No Collection file or Drive links. Count bullets are still included.
@@ -793,19 +840,22 @@ def build_fallback(mention: str, reddit_items: list, sheet_rows: list,
         para = ("Quiet day in the bot channels - nothing new dropped in the "
                 "last 24 hours. The feeds are watching, see you tomorrow.")
     return assemble_message(head, para, reddit_items, sheet_rows,
-                            notifier_files, collection_mention)
+                            notifier_files, collection_mention,
+                            database_mention)
 
 
 def build_message(mention: str, date_label: str, reddit_items: list,
                   sheet_rows: list, notifier_files: list | None,
-                  api_key: str, collection_mention: str) -> str:
+                  api_key: str, collection_mention: str,
+                  database_mention: str) -> str:
     head = f"**{mention} Daily Bot Channel Recap \U0001f916**"
     if not reddit_items and not sheet_rows and not notifier_files:
         para = ("Quiet day in the bot channels - nothing new dropped in "
                 "the last 24 hours. The feeds are watching, see you "
                 "tomorrow.")
         return assemble_message(head, para, reddit_items, sheet_rows,
-                                notifier_files, collection_mention)
+                                notifier_files, collection_mention,
+                                database_mention)
     para = ""
     if api_key:
         try:
@@ -816,7 +866,8 @@ def build_message(mention: str, date_label: str, reddit_items: list,
             log(f"gemini recap failed, using fallback: {e}")
     if not para:
         return build_fallback(mention, reddit_items, sheet_rows,
-                              notifier_files, collection_mention)
+                              notifier_files, collection_mention,
+                              database_mention)
     # Defensive cleanup: the model is asked for a bare paragraph, but if it
     # emits a headline line or markdown anyway, strip it - the real headline
     # is prepended deterministically below so it can never render broken.
@@ -826,9 +877,11 @@ def build_message(mention: str, date_label: str, reddit_items: list,
     para = strip_prohibited_links(" ".join(lines).replace("**", ""))
     if not para:
         return build_fallback(mention, reddit_items, sheet_rows,
-                              notifier_files, collection_mention)
+                              notifier_files, collection_mention,
+                              database_mention)
     return assemble_message(head, para, reddit_items, sheet_rows,
-                            notifier_files, collection_mention)
+                            notifier_files, collection_mention,
+                            database_mention)
 
 
 def top_picks(reddit_items: list, n: int = 5) -> str:
@@ -940,9 +993,10 @@ def main() -> int:
                else resolve_discord_user_mention(token, "faneditfanclub"))
     collection_mention = resolve_collection_mention(
         env("NOTIFIER_PAT"), token, cfg)
+    database_mention = resolve_database_mention(token, cfg)
     msg = build_message(mention, date_label, reddit_items, new_rows,
                         notifier_files, env("GEMINI_API_KEY"),
-                        collection_mention)
+                        collection_mention, database_mention)
     if note:
         msg = f"{msg}\n_{note}_"
     msg = msg[:1950]
