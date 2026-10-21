@@ -93,7 +93,7 @@ def main() -> int:
 
     # Discord #cyber-chat via "Fan Edit Fan Club" webhook (fallback: bot)
     try:
-        cid = resolve_discord_channel_id(bot_token, "cyber-chat")
+        cid = resolve_discord_channel_id(bot_token, "\U0001f4d0cyber-chat\U0001f4ac")
         try:
             post_via_club_webhook(bot_token, cid, DISCORD_TEXT)
             log("discord #cyber-chat: posted via Fan Edit Fan Club webhook")
@@ -106,21 +106,27 @@ def main() -> int:
         log(f"discord FAILED: {e}")
 
     # X via Buffer
-    try:
-        pid = resolve_buffer_profile_id(buffer_token, "faneditfanclub")
-        post_buffer_x(buffer_token, pid, X_TEXT)
-        log("x: posted via buffer")
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"x: {e}")
-        log(f"x FAILED: {e}")
+    if env("SKIP_X") == "true":
+        log("x: skipped (SKIP_X=true)")
+    else:
+        try:
+            pid = resolve_buffer_profile_id(buffer_token, "faneditfanclub")
+            post_buffer_x(buffer_token, pid, X_TEXT)
+            log("x: posted via buffer")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"x: {e}")
+            log(f"x FAILED: {e}")
 
     # Facebook Page via Graph API
-    try:
-        post_facebook_page(fb_token, fb_page_id, FB_TEXT)
-        log("facebook page: posted")
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"fb page: {e}")
-        log(f"fb page FAILED: {e}")
+    if env("SKIP_FB") == "true":
+        log("facebook page: skipped (SKIP_FB=true)")
+    else:
+        try:
+            post_facebook_page(fb_token, fb_page_id, FB_TEXT)
+            log("facebook page: posted")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"fb page: {e}")
+            log(f"fb page FAILED: {e}")
 
     if errors:
         log(f"ERRORS: {errors}")
