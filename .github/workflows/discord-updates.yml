@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run mode: updates (default) or cleanup-226'
+        description: 'Run mode: updates (default), cleanup-226, or update-avatar'
         required: false
         default: 'updates'
 permissions:
@@ -34,6 +34,11 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
           GITHUB_BRANCH: main
         run: python cleanup_226.py
+      - name: update webhook avatar
+        if: github.event.inputs.mode == 'update-avatar'
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: python update_webhook_avatar.py
       - name: run discord updates watcher
         if: github.event.inputs.mode != 'cleanup-226'
         env:
