@@ -545,9 +545,10 @@ def resolve_collection_mention(pat: str, token: str, cfg: dict) -> str:
 def resolve_database_mention(token: str, cfg: dict) -> str:
     """Discord <#id> mention for the Fan Edit Central Database channel.
 
-    The pinned id is the text channel the sheet poster writes to
-    (discord.sheet_channel). When the pin is absent, that same name is
-    resolved from the channels visible to the bot.
+    The pinned id is the text channel #🪭fan-edit-central-database.
+    The sheet poster resolves discord.sheet_channel to this id. When the
+    pin is absent, that same name is resolved from the channels visible
+    to the bot.
     """
     pinned = str(
         env("DATABASE_DISCORD_CHANNEL_ID")
