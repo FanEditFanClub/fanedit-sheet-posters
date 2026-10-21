@@ -504,7 +504,15 @@ def discover_collection_channel_id(pat: str, token: str) -> tuple:
 
 
 def resolve_collection_mention(pat: str, token: str, cfg: dict) -> str:
-    """Discord <#id> mention for the Fan Edit Fan Club Collection channel."""
+    """Discord <#id> mention for the Fan Edit Fan Club Collection channel.
+
+    The pinned id is the text channel #🗂️fan-edit-fan-club-collection.
+    Checked notifier-repo workflows, README, and tests did not publish a
+    channel id or webhook URL (those stay in Actions secrets), so the id
+    comes from the bot-visible channel of that name. Discovery below still
+    reads the notifier repo, including a webhook's channel_id, when the
+    pin is absent.
+    """
     pinned = str(
         env("COLLECTION_DISCORD_CHANNEL_ID")
         or (cfg.get("collection") or {}).get("discord_channel_id")

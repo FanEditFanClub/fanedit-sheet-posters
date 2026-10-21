@@ -16,6 +16,9 @@
     "sheet_channel": "fan-edit-central-database",
     "reddit_channel": "reddit-fan-edits-feed"
   },
+  "collection": {
+    "discord_channel_id": "1529947922429640925"
+  },
   "buffer": {
     "channel_name": "FanEditFanClub X Free Profile",
     "threads_channel_name": "faneditfanclub"
