@@ -77,6 +77,23 @@ def utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+
+def _post_digest(token: str, channel_name: str, msg: str) -> None:
+    """Post the recap as the Optimus webhook when DISCORD_DIGEST_WEBHOOK is
+    set and the target is the digest channel; otherwise use the bot."""
+    hook = os.environ.get("DISCORD_DIGEST_WEBHOOK", "").strip()
+    digest_ch = env("DISCORD_DIGEST_CHANNEL", "cyberchat")
+    if hook and channel_name == digest_ch:
+        body = json.dumps({"content": msg[:2000], "username": "Optimus",
+                           "allowed_mentions": {"parse": ["users", "roles"]}}).encode()
+        req = urllib.request.Request(hook + "?wait=true", data=body, method="POST",
+                                     headers={"Content-Type": "application/json",
+                                              "User-Agent": DISCORD_UA})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+        return
+    post_discord(token, resolve_discord_channel_id(token, channel_name), msg)
+
 # ---------------------------------------------------------------- sources
 
 def fetch_sheet_rows(sheet_id: str, tab: str) -> list:
@@ -929,8 +946,7 @@ def main() -> int:
         msg = manual.replace("{headline}", head)[:1950]
         channel = (env("MANUAL_CHANNEL")
                    or env("DISCORD_DIGEST_CHANNEL", "cyberchat"))
-        cid = resolve_discord_channel_id(token, channel)
-        post_discord(token, cid, msg)
+        _post_digest(token, channel, msg)
         log(f"manual message posted to #{channel}")
         return 0
 
@@ -1010,9 +1026,7 @@ def main() -> int:
         return 0
 
     try:
-        cid = resolve_discord_channel_id(
-            token, env("DISCORD_DIGEST_CHANNEL", "cyberchat"))
-        post_discord(token, cid, msg)
+        _post_digest(token, env("DISCORD_DIGEST_CHANNEL", "cyberchat"), msg)
         log(f"digest posted to #{env('DISCORD_DIGEST_CHANNEL', 'cyberchat')}")
     except Exception as e:  # noqa: BLE001
         log(f"digest post failed: {e}")

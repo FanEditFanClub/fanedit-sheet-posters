@@ -38,6 +38,7 @@ jobs:
       - name: run digest
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_DIGEST_WEBHOOK: ${{ secrets.DISCORD_DIGEST_WEBHOOK }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NOTIFIER_PAT: ${{ secrets.NOTIFIER_PAT }}
           DISCORD_DIGEST_CHANNEL: 📐cyber-chat💬
