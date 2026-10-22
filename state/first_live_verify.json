@@ -7,7 +7,7 @@
   "sheet": {
     "discord_notified": true,
     "facebook_notified": true,
-    "threads_notified": false,
+    "threads_notified": true,
     "x_notified": true
   }
 }
