@@ -79,12 +79,12 @@ def utcnow() -> dt.datetime:
 
 
 def _post_digest(token: str, channel_name: str, msg: str) -> None:
-    """Post the recap as the Optimus webhook when DISCORD_DIGEST_WEBHOOK is
+    """Post the recap via the digest webhook when DISCORD_DIGEST_WEBHOOK is
     set and the target is the digest channel; otherwise use the bot."""
     hook = os.environ.get("DISCORD_DIGEST_WEBHOOK", "").strip()
     digest_ch = env("DISCORD_DIGEST_CHANNEL", "cyberchat")
     if hook and channel_name == digest_ch:
-        body = json.dumps({"content": msg[:2000], "username": "Optimus",
+        body = json.dumps({"content": msg[:2000],
                            "allowed_mentions": {"parse": ["users", "roles"]}}).encode()
         req = urllib.request.Request(hook + "?wait=true", data=body, method="POST",
                                      headers={"Content-Type": "application/json",
